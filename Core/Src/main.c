@@ -37,6 +37,12 @@ along with this program.If not, see < https://www.gnu.org/licenses/>.
 #define LDC_HONE_PERIOD 100 // this many samples should pass within LDC_HONE_DEADBAND before LDC honing executes
 #define ALPHA 170 // weighting factor in smoothing the process vals, closer to FILTER_SCALAR means more recent vals are weighted more
 #define FILTER_SCALAR 1000 // fixed point scalar for fixed point filter calculations
+#define X_SCALE_FACTOR 1 // Scaling factors to bring the values up to us the full range of int16_t so other programs play nice
+#define Y_SCALE_FACTOR 1
+#define Z_SCALE_FACTOR 1
+#define RX_SCALE_FACTOR 1
+#define RY_SCALE_FACTOR 1
+#define RZ_SCALE_FACTOR 1
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -72,6 +78,16 @@ void lowPassFilter(int32_t input, int32_t *filteredValue){
     // *filteredValue  = *filteredValue * FILTER_SCALAR;
     // input = input * FILTER_SCALAR;
     *filteredValue = ((FILTER_SCALAR-ALPHA) * (*filteredValue) + ALPHA * input)/FILTER_SCALAR;
+}
+
+int16_t boundToInt16(int32_t value) {
+    if (value < INT16_MIN) {
+        return INT16_MIN;
+    } else if (value > INT16_MAX) {
+        return INT16_MAX;
+    } else {
+        return (int16_t)value;
+    }
 }
 
 /* USER CODE END PFP */
@@ -304,12 +320,18 @@ int main(void)
       ry = 0;
     }
 
+    x = X_SCALE_FACTOR * x;
+    y = Y_SCALE_FACTOR * y;
+    z = Z_SCALE_FACTOR * z;
+    rx = RX_SCALE_FACTOR * rx;
+    ry = RY_SCALE_FACTOR * ry;
+    rz = RZ_SCALE_FACTOR * rz;
     // Delay a bit for the LDCs to get new readings 
     // (in the future, add INTB pin support so the LDCs can alert the MCU when they have new data ready)
     HAL_Delay(20);
 
     // Send the data.
-    sendGamepadReport((int16_t)x,(int16_t)y,(int16_t)z,(int16_t)rx,(int16_t)ry,(int16_t)rz);
+    sendGamepadReport(boundToInt16(x),boundToInt16(y),boundToInt16(z),boundToInt16(rx),boundToInt16(ry),boundToInt16(rz));
 
     // Debug send for if you want the raw coil data
     // sendGamepadReport(
