@@ -23,7 +23,7 @@ along with this program.If not, see < https://www.gnu.org/licenses/>.
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "STM_LDC16xx.h"
-
+#include "usbd_hid.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -64,7 +64,7 @@ extern USBD_HandleTypeDef hUsbDeviceFS;
 static inline void sendGamepadReport(int16_t x, int16_t y, int16_t z, int16_t rx, int16_t ry, int16_t rz)
 {
   int16_t buffer[6] = {x, y, z, rx, ry, rz};
-  USBD_HID_SendReport(&hUsbDeviceFS, buffer, sizeof(buffer));
+  USBD_HID_SendReport(&hUsbDeviceFS,(void *)buffer, sizeof(buffer));
 }
 
 void lowPassFilter(int32_t input, int32_t *filteredValue){
