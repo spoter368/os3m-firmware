@@ -122,3 +122,5 @@ void waitForCoilDataReady(uint8_t LDC_addr, uint8_t coil){
     readRegister(LDC_addr, LDC16xx_STATUS, &tmp);
   }
 }
+
+
