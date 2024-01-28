@@ -33,16 +33,17 @@ along with this program.If not, see < https://www.gnu.org/licenses/>.
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define BOOTLOADER_ADDRESS 0x1FFFC400 // address of the bootloader ROM
 #define LDC_HONE_DEADBAND 20 // the magnitude of all channel readings should be less than this before LDC honing begins
 #define LDC_HONE_PERIOD 100 // this many samples should pass within LDC_HONE_DEADBAND before LDC honing executes
 #define ALPHA 170 // weighting factor in smoothing the process vals, closer to FILTER_SCALAR means more recent vals are weighted more
 #define FILTER_SCALAR 1000 // fixed point scalar for fixed point filter calculations
-#define X_SCALE_FACTOR 1 // Scaling factors to bring the values up to us the full range of int16_t so other programs play nice
-#define Y_SCALE_FACTOR 1
-#define Z_SCALE_FACTOR 1
-#define RX_SCALE_FACTOR 1
-#define RY_SCALE_FACTOR 1
-#define RZ_SCALE_FACTOR 1
+#define X_SCALE_FACTOR 120 // Scaling factors to bring the values up to us the full range of int16_t so other programs play nice
+#define Y_SCALE_FACTOR 120
+#define Z_SCALE_FACTOR 35
+#define RX_SCALE_FACTOR 30
+#define RY_SCALE_FACTOR 30
+#define RZ_SCALE_FACTOR 50
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -73,13 +74,6 @@ static inline void sendGamepadReport(int16_t x, int16_t y, int16_t z, int16_t rx
   USBD_HID_SendReport(&hUsbDeviceFS, buffer, sizeof(buffer));
 }
 
-void lowPassFilter(int32_t input, int32_t *filteredValue){
-      // Update the filtered value using the low-pass filter equation
-    // *filteredValue  = *filteredValue * FILTER_SCALAR;
-    // input = input * FILTER_SCALAR;
-    *filteredValue = ((FILTER_SCALAR-ALPHA) * (*filteredValue) + ALPHA * input)/FILTER_SCALAR;
-}
-
 int16_t boundToInt16(int32_t value) {
     if (value < INT16_MIN) {
         return INT16_MIN;
@@ -88,6 +82,43 @@ int16_t boundToInt16(int32_t value) {
     } else {
         return (int16_t)value;
     }
+}
+
+void jumpToBootloader(void) {
+  // Taken from https://community.st.com/t5/stm32-mcus/how-to-jump-to-system-bootloader-from-application-code-on-stm32/tac-p/596379/highlight/true#M617 
+  void (*SysMemBootJump)(void);
+  uint8_t i;
+
+  __disable_irq();
+  // Reset USB
+  USB->CNTR = 0x0003;
+
+  //De-init all peripherals
+  HAL_I2C_DeInit(&hi2c1);
+  HAL_GPIO_DeInit(GPIOA, GPIO_PIN_2 | GPIO_PIN_3);
+
+  // Disable Systick
+  SysTick->CTRL = 0;
+  SysTick->LOAD = 0;
+  SysTick->VAL = 0;
+
+  // Reset clock to default
+  HAL_RCC_DeInit();
+
+  // Clear all interrupt bits
+  for (i = 0; i < sizeof(NVIC->ICER) / sizeof(NVIC->ICER[0]); i++)
+  {
+    NVIC->ICER[i] = 0xFFFFFFFF;
+    NVIC->ICPR[i] = 0xFFFFFFFF;
+  }
+
+  __enable_irq();
+
+  SysMemBootJump = (void (*)(void)) (*((uint32_t *) (BOOTLOADER_ADDRESS + 4)));
+  __set_MSP(*(uint32_t *)BOOTLOADER_ADDRESS);
+  SysMemBootJump();
+
+  while (1); // Just in case...
 }
 
 /* USER CODE END PFP */
@@ -159,7 +190,11 @@ int main(void)
   MX_I2C1_Init();
   MX_USB_DEVICE_Init();
   /* USER CODE BEGIN 2 */
-
+  uint8_t is_earlier_revision = 0;
+  // Check if user has earlier revision of board where UART pins are shorted by default
+  if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_SET) {
+    is_earlier_revision = 1;
+  }
   // Reset the LDCs
   resetDevice(0x2a);
   resetDevice(0x2b);
@@ -178,18 +213,12 @@ int main(void)
   uint32_t ldc1_ch3 = 0;
   uint32_t ldc2_ch0 = 0;
   uint32_t ldc2_ch1 = 0;
-  volatile int32_t ldc1_ch0_dif = 0;
-  volatile int32_t ldc1_ch1_dif = 0;
-  volatile int32_t ldc1_ch2_dif = 0;
-  volatile int32_t ldc1_ch3_dif = 0;
-  volatile int32_t ldc2_ch0_dif = 0;
-  volatile int32_t ldc2_ch1_dif = 0;
-  volatile int32_t ldc1_ch0_dif_filtered = 0;
-  volatile int32_t ldc1_ch1_dif_filtered = 0;
-  volatile int32_t ldc1_ch2_dif_filtered = 0;
-  volatile int32_t ldc1_ch3_dif_filtered = 0;
-  volatile int32_t ldc2_ch0_dif_filtered = 0;
-  volatile int32_t ldc2_ch1_dif_filtered = 0;
+  int32_t ldc1_ch0_dif = 0;
+  int32_t ldc1_ch1_dif = 0;
+  int32_t ldc1_ch2_dif = 0;
+  int32_t ldc1_ch3_dif = 0;
+  int32_t ldc2_ch0_dif = 0;
+  int32_t ldc2_ch1_dif = 0;
   uint32_t ldc1_ch0_cal = 0;
   uint32_t ldc1_ch1_cal = 0;
   uint32_t ldc1_ch2_cal = 0;
@@ -211,7 +240,6 @@ int main(void)
   readChannel(0x2b, 0, &ldc2_ch0_cal);
   readChannel(0x2b, 1, &ldc2_ch1_cal);
 
-
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -219,7 +247,9 @@ int main(void)
 
   while (1)
   {
-
+    if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3) == GPIO_PIN_SET && !is_earlier_revision) {
+      jumpToBootloader();
+    }
     // Grab a new set of values
     readChannel(0x2a, 0, &ldc1_ch0);
     readChannel(0x2a, 1, &ldc1_ch1);
@@ -237,42 +267,28 @@ int main(void)
     ldc2_ch0_dif = ((int32_t)ldc2_ch0_cal - (int32_t)ldc2_ch0) / 125;
     ldc2_ch1_dif = ((int32_t)ldc2_ch1_cal - (int32_t)ldc2_ch1) / 125;
 
-    // Disable the LPF for now, it just makes it sluggish
-    // lowPassFilter(ldc1_ch0_dif, &ldc1_ch0_dif_filtered);
-    // lowPassFilter(ldc1_ch1_dif, &ldc1_ch1_dif_filtered);
-    // lowPassFilter(ldc1_ch2_dif, &ldc1_ch2_dif_filtered);
-    // lowPassFilter(ldc1_ch3_dif, &ldc1_ch3_dif_filtered);
-    // lowPassFilter(ldc2_ch0_dif, &ldc2_ch0_dif_filtered);
-    // lowPassFilter(ldc2_ch1_dif, &ldc2_ch1_dif_filtered);
-    ldc1_ch0_dif_filtered = ldc1_ch0_dif;
-    ldc1_ch1_dif_filtered = ldc1_ch1_dif;
-    ldc1_ch2_dif_filtered = ldc1_ch2_dif;
-    ldc1_ch3_dif_filtered = ldc1_ch3_dif;
-    ldc2_ch0_dif_filtered = ldc2_ch0_dif;
-    ldc2_ch1_dif_filtered = ldc2_ch1_dif;
-
     // Perform honing (if necessary)
     switch (ldc_honing_state){
       case HONED:
         if(
-          abs(ldc1_ch0_dif_filtered) > LDC_HONE_DEADBAND ||
-          abs(ldc1_ch1_dif_filtered) > LDC_HONE_DEADBAND ||
-          abs(ldc1_ch2_dif_filtered) > LDC_HONE_DEADBAND ||
-          abs(ldc1_ch3_dif_filtered) > LDC_HONE_DEADBAND ||
-          abs(ldc2_ch0_dif_filtered) > LDC_HONE_DEADBAND ||
-          abs(ldc2_ch1_dif_filtered) > LDC_HONE_DEADBAND
+          abs(ldc1_ch0_dif) > LDC_HONE_DEADBAND ||
+          abs(ldc1_ch1_dif) > LDC_HONE_DEADBAND ||
+          abs(ldc1_ch2_dif) > LDC_HONE_DEADBAND ||
+          abs(ldc1_ch3_dif) > LDC_HONE_DEADBAND ||
+          abs(ldc2_ch0_dif) > LDC_HONE_DEADBAND ||
+          abs(ldc2_ch1_dif) > LDC_HONE_DEADBAND
         ){
           ldc_honing_state = ACTIVE;
         }
         break;
       case ACTIVE:
         if(
-          abs(ldc1_ch0_dif_filtered) < LDC_HONE_DEADBAND &&
-          abs(ldc1_ch1_dif_filtered) < LDC_HONE_DEADBAND &&
-          abs(ldc1_ch2_dif_filtered) < LDC_HONE_DEADBAND &&
-          abs(ldc1_ch3_dif_filtered) < LDC_HONE_DEADBAND &&
-          abs(ldc2_ch0_dif_filtered) < LDC_HONE_DEADBAND &&
-          abs(ldc2_ch1_dif_filtered) < LDC_HONE_DEADBAND
+          abs(ldc1_ch0_dif) < LDC_HONE_DEADBAND &&
+          abs(ldc1_ch1_dif) < LDC_HONE_DEADBAND &&
+          abs(ldc1_ch2_dif) < LDC_HONE_DEADBAND &&
+          abs(ldc1_ch3_dif) < LDC_HONE_DEADBAND &&
+          abs(ldc2_ch0_dif) < LDC_HONE_DEADBAND &&
+          abs(ldc2_ch1_dif) < LDC_HONE_DEADBAND
         ){
           ldc_honing_count++;
           in_deadband = 1;
@@ -296,12 +312,12 @@ int main(void)
 
 
     // Get sums and differences
-    int32_t cm1 = ldc1_ch0_dif_filtered+ldc1_ch1_dif_filtered;
-    int32_t dm1 = ldc1_ch0_dif_filtered-ldc1_ch1_dif_filtered;
-    int32_t cm2 = ldc1_ch2_dif_filtered+ldc1_ch3_dif_filtered;
-    int32_t dm2 = ldc1_ch2_dif_filtered-ldc1_ch3_dif_filtered;
-    int32_t cm3 = ldc2_ch0_dif_filtered+ldc2_ch1_dif_filtered;
-    int32_t dm3 = ldc2_ch0_dif_filtered-ldc2_ch1_dif_filtered;
+    int32_t cm1 = ldc1_ch0_dif+ldc1_ch1_dif;
+    int32_t dm1 = ldc1_ch0_dif-ldc1_ch1_dif;
+    int32_t cm2 = ldc1_ch2_dif+ldc1_ch3_dif;
+    int32_t dm2 = ldc1_ch2_dif-ldc1_ch3_dif;
+    int32_t cm3 = ldc2_ch0_dif+ldc2_ch1_dif;
+    int32_t dm3 = ldc2_ch0_dif-ldc2_ch1_dif;
 
     // Compute tranformation
     int32_t z = cm1 + cm2 + cm3;
@@ -335,12 +351,12 @@ int main(void)
 
     // Debug send for if you want the raw coil data
     // sendGamepadReport(
-    //   ldc1_ch0_dif_filtered,
-    //   ldc1_ch1_dif_filtered,
-    //   ldc1_ch2_dif_filtered,
-    //   ldc1_ch3_dif_filtered,
-    //   ldc2_ch0_dif_filtered,
-    //   ldc2_ch1_dif_filtered
+    //   ldc1_ch0_dif,
+    //   ldc1_ch1_dif,
+    //   ldc1_ch2_dif,
+    //   ldc1_ch3_dif,
+    //   ldc2_ch0_dif,
+    //   ldc2_ch1_dif
     // );
 
     /* USER CODE END WHILE */
@@ -448,12 +464,29 @@ static void MX_I2C1_Init(void)
   */
 static void MX_GPIO_Init(void)
 {
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
 /* USER CODE BEGIN MX_GPIO_Init_1 */
 /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_2, GPIO_PIN_SET);
+
+  /*Configure GPIO pin : PA2 */
+  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PA3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_3;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
