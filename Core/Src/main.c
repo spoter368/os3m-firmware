@@ -36,8 +36,6 @@ along with this program.If not, see < https://www.gnu.org/licenses/>.
 #define BOOTLOADER_ADDRESS 0x1FFFC400 // address of the bootloader ROM
 #define LDC_HONE_DEADBAND 20 // the magnitude of all channel readings should be less than this before LDC honing begins
 #define LDC_HONE_PERIOD 100 // this many samples should pass within LDC_HONE_DEADBAND before LDC honing executes
-#define ALPHA 170 // weighting factor in smoothing the process vals, closer to FILTER_SCALAR means more recent vals are weighted more
-#define FILTER_SCALAR 1000 // fixed point scalar for fixed point filter calculations
 #define X_SCALE_FACTOR 120 // Scaling factors to bring the values up to us the full range of int16_t so other programs play nice
 #define Y_SCALE_FACTOR 120
 #define Z_SCALE_FACTOR 35
